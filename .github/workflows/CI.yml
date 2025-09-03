@@ -13,13 +13,33 @@ env:
 
 jobs:
   Run_Tests:
-    name: "Run tests with ${{ matrix.compiler }} and ${{ matrix.mpi }} on ${{ matrix.os }}"
+    name: ${{ matrix.test_type }} - ${{ matrix.compiler }} - ${{ matrix.mpi }} - ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: ["macos-latest", "ubuntu-latest"]
         compiler: ["gfortran", "lfortran"]
         mpi: ["openmpi", "mpich"]
+        test_type: ["standalone", "pot3d"]
+        include:
+          # Add standalone-no-wrappers tests only for GFortran
+          - os: "macos-latest"
+            compiler: "gfortran"
+            mpi: "openmpi"
+            test_type: "standalone-no-wrappers"
+          - os: "macos-latest"
+            compiler: "gfortran"
+            mpi: "mpich"
+            test_type: "standalone-no-wrappers"
+          - os: "ubuntu-latest"
+            compiler: "gfortran"
+            mpi: "openmpi"
+            test_type: "standalone-no-wrappers"
+          - os: "ubuntu-latest"
+            compiler: "gfortran"
+            mpi: "mpich"
+            test_type: "standalone-no-wrappers"
     steps:
       - uses: actions/checkout@v4
 
@@ -29,56 +49,57 @@ jobs:
           micromamba-version: '2.0.4-0'
           environment-file: ci/environment_${{ matrix.compiler }}_${{ matrix.mpi }}.yml
 
-      - name: Run standalone tests without custom MPI wrappers
-        if: matrix.compiler == 'gfortran'
+      - name: Run standalone tests without MPI wrappers
+        if: matrix.test_type == 'standalone-no-wrappers'
         shell: bash -e -x -l {0}
         run: |
           cd tests
           ./run_tests.sh --without-wrappers
 
-      - name: Run standalone tests with ${{ matrix.compiler }}
+      - name: Run standalone tests with optimization variations
+        if: matrix.test_type == 'standalone'
         shell: bash -e -x -l {0}
         run: |
           cd tests
-
-          if [ "${{ matrix.compiler }}" = "gfortran" ]; then
-            FC_without_opt="gfortran -cpp"
-            FC_with_opt="gfortran -O3 -march=native -cpp"
-          else
-            FC_without_opt="lfortran --cpp"
-            FC_with_opt="lfortran --fast --cpp"
+          if [[ "${{ matrix.compiler }}" == "gfortran" ]]; then
+            if [[ "${{ matrix.mpi }}" == "openmpi" ]]; then
+              FC="gfortran -cpp -DOPEN_MPI=yes" ./run_tests.sh
+              FC="gfortran -O3 -march=native -cpp -DOPEN_MPI=yes" ./run_tests.sh
+            else
+              FC="gfortran -cpp" ./run_tests.sh
+              FC="gfortran -O3 -march=native -cpp" ./run_tests.sh
+            fi
+          else  # lfortran
+            if [[ "${{ matrix.mpi }}" == "openmpi" ]]; then
+              FC="lfortran --cpp -DOPEN_MPI=yes" ./run_tests.sh
+              FC="lfortran --fast --cpp -DOPEN_MPI=yes" ./run_tests.sh
+            else
+              FC="lfortran --cpp" ./run_tests.sh
+              FC="lfortran --fast --cpp" ./run_tests.sh
+            fi
           fi
 
-          # when it's OpenMPI we add "-DOPEN_MPI=yes" flag
-          if [ "${{ matrix.mpi }}" = "openmpi" ]; then
-            FC_without_opt="$FC_without_opt -DOPEN_MPI=yes"
-            FC_with_opt="$FC_with_opt -DOPEN_MPI=yes"
-          fi
-
-          # Run tests with and without optimization
-          FC="$FC_without_opt" ./run_tests.sh
-          FC="$FC_with_opt" ./run_tests.sh
-
-      - name: Build and validate POT3D with ${{ matrix.compiler }}
+      - name: Build and validate POT3D
+        if: matrix.test_type == 'pot3d'
         shell: bash -e -x -l {0}
         run: |
           cd tests/pot3d
-
-          if [ "${{ matrix.compiler }}" = "gfortran" ]; then
-            FC_without_opt="gfortran -cpp"
-            FC_with_opt="gfortran -O3 -march=native -cpp"
-            build_script="./build_and_run_gfortran.sh"
-          else
-            FC_without_opt="lfortran --cpp"
-            FC_with_opt="lfortran --fast --cpp"
-            build_script="./build_and_run_lfortran.sh"
+          if [[ "${{ matrix.compiler }}" == "gfortran" ]]; then
+            BUILD_SCRIPT="./build_and_run_gfortran.sh"
+            if [[ "${{ matrix.mpi }}" == "openmpi" ]]; then
+              FC="gfortran -O3 -march=native -cpp -DOPEN_MPI=yes" $BUILD_SCRIPT
+              FC="gfortran -cpp -DOPEN_MPI=yes" $BUILD_SCRIPT
+            else
+              FC="gfortran -O3 -march=native -cpp" $BUILD_SCRIPT
+              FC="gfortran -cpp" $BUILD_SCRIPT
+            fi
+          else  # lfortran
+            BUILD_SCRIPT="./build_and_run_lfortran.sh"
+            if [[ "${{ matrix.mpi }}" == "openmpi" ]]; then
+              FC="lfortran --fast --cpp -DOPEN_MPI=yes" $BUILD_SCRIPT
+              FC="lfortran --cpp -DOPEN_MPI=yes" $BUILD_SCRIPT
+            else
+              FC="lfortran --fast --cpp" $BUILD_SCRIPT
+              FC="lfortran --cpp" $BUILD_SCRIPT
+            fi
           fi
-
-          # when it's OpenMPI we add "-DOPEN_MPI=yes" flag
-          if [ "${{ matrix.mpi }}" = "openmpi" ]; then
-            FC_without_opt="$FC_without_opt -DOPEN_MPI=yes"
-            FC_with_opt="$FC_with_opt -DOPEN_MPI=yes"
-          fi
-
-          FC="$FC_without_opt" $build_script
-          FC="$FC_with_opt" $build_script
